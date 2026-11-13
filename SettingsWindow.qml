@@ -348,6 +348,16 @@ Item {
               }
             }
 
+            Toggle {
+              visible: root.section === "appearance"
+              width: page.width
+              label: strings.t("settings.scrim")
+              description: strings.t("settings.scrimHelp")
+              foreground: root.foreground
+              checked: root.service.scrim
+              onClicked: root.set("scrim", !root.service.scrim, root.service.look.scrim)
+            }
+
             // ---- Sources ----
             Repeater {
               model: root.sources

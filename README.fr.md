@@ -144,6 +144,7 @@ l'ouvre) :
 | Réglage | Valeurs | Par défaut |
 | --- | --- | --- |
 | `style` | `"omarchy"`, `"cupertino"`, `"redmond"`, `"plasma"` | le style de qDock, sinon `"cupertino"` |
+| `scrim` | `true` assombrit l'écran derrière qSpot, `false` le laisse tel quel | selon le style : oui pour Omarchy et Redmond, non pour Cupertino et Plasma |
 | `apps` | `false` laisse les apps de côté | `true` |
 | `windows` | `false` : les apps ouvertes se relancent au lieu de s'afficher, et les fenêtres ne sont pas cherchées | `true` |
 | `files` | `false` laisse les fichiers de côté | `true` |

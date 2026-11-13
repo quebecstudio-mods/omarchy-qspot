@@ -84,6 +84,8 @@ Item {
               border: Util.alpha(Commons.Color.menu.text, 0.18), borderWidth: 1,
               scrim: false, top: true, compact: true, fieldBox: false, mark: false }
   })[styleName]
+  // The darkened screen behind qSpot: the style's choice unless set.
+  readonly property bool scrim: typeof root.settings.scrim === "boolean" ? root.settings.scrim : root.look.scrim
 
   // The shell hands its app library only to menu plugins, so qSpot loads its
   // own copy of Omarchy's, as qDock does: same ranking, hidden entries, icons
@@ -919,7 +921,7 @@ Item {
 
     Rectangle {
       anchors.fill: parent
-      color: root.look.scrim ? Commons.Color.menu.scrim : "transparent"
+      color: root.scrim ? Commons.Color.menu.scrim : "transparent"
     }
 
     MouseArea {

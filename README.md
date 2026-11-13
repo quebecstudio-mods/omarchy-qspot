@@ -141,6 +141,7 @@ window opens it):
 | Setting | Values | Default |
 | --- | --- | --- |
 | `style` | `"omarchy"`, `"cupertino"`, `"redmond"`, `"plasma"` | qDock's style, else `"cupertino"` |
+| `scrim` | `true` darkens the screen behind qSpot, `false` leaves it as it is | the style's: on for Omarchy and Redmond, off for Cupertino and Plasma |
 | `apps` | `false` leaves apps out | `true` |
 | `windows` | `false`: open apps start again rather than come forward, and windows are not searched | `true` |
 | `files` | `false` leaves files out | `true` |
