@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "quebecstudio.qspot",
+  "name": "qSpot",
+  "version": "1.0.0",
+  "author": "Québec Studio",
+  "license": "MIT",
+  "homepage": "https://github.com/quebecstudio-mods/omarchy-qspot",
+  "description": "A Spotlight-style search for Omarchy: apps and files in one field, with calculations and web shortcuts.",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "Spot.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "qSpot",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

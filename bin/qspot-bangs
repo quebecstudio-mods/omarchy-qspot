@@ -1,0 +1,135 @@
+#!/usr/bin/env python3
+"""Keeps qSpot's copy of DuckDuckGo's bangs, and the icons of the sites used.
+
+    qspot-bangs update [max-age]   downloads DuckDuckGo's list of bangs if
+                                   qSpot's copy is older than max-age seconds
+                                   (default: a week); prints "updated" when it did
+    qspot-bangs icon <domain>      downloads a site's icon, once
+    qspot-bangs icons [count] [domain...]
+                                   downloads the icons of the most used bangs
+                                   (300 by default) and of the domains given
+                                   (the user's own shortcuts), those not yet
+                                   there; prints "updated" when it got any
+
+The list (https://duckduckgo.com/bang.js, about 13,500 bangs) is kept as
+~/.cache/qspot/bangs.json: [[trigger, name, domain, address], ...], the most
+used first, the address holding {{{s}}} where the terms go. It does not depend
+on what is typed. Icons come from DuckDuckGo's icon service, for the most
+used bangs and the user's own shortcuts ahead of time, and for any other site
+once the user has opened it through qSpot: nothing typed reaches anyone before
+Enter. qSpot runs none of this when its "bangUpdates" setting is false.
+"""
+
+import json
+import os
+import re
+import sys
+import time
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+HOME = os.path.expanduser("~")
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "qspot")
+LIST = os.path.join(CACHE, "bangs.json")
+ICONS = os.path.join(CACHE, "icons")
+SOURCE = "https://duckduckgo.com/bang.js"
+ICON_SOURCE = "https://icons.duckduckgo.com/ip3/%s.ico"
+WEEK = 7 * 86400
+DOMAIN = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}$")
+
+
+def fetch(url, limit):
+    request = urllib.request.Request(url, headers={"User-Agent": "qSpot"})
+    with urllib.request.urlopen(request, timeout=30) as response:
+        data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("too large")
+    return data
+
+
+def write(path, data):
+    temp = path + ".new"
+    with open(temp, "wb") as f:
+        f.write(data)
+    os.replace(temp, path)
+
+
+def update(max_age):
+    try:
+        if time.time() - os.stat(LIST).st_mtime < max_age:
+            return False
+    except OSError:
+        pass
+    try:
+        bangs = json.loads(fetch(SOURCE, 20 * 1024 * 1024))
+    except (OSError, ValueError):
+        return False
+    rows = []
+    seen = set()
+    for b in sorted((b for b in bangs if isinstance(b, dict)), key=lambda b: -int(b.get("r") or 0)):
+        trigger = str(b.get("t") or "").lower()
+        address = str(b.get("u") or "")
+        if not trigger or trigger in seen or not address:
+            continue
+        # A few addresses are DuckDuckGo's own pages, without the site.
+        if address.startswith("/"):
+            address = "https://duckduckgo.com" + address
+        if not address.startswith(("https://", "http://")):
+            continue
+        seen.add(trigger)
+        rows.append([trigger, str(b.get("s") or trigger), str(b.get("d") or ""), address])
+    if len(rows) < 1000:
+        return False  # not the list we expect: keep the old one
+    os.makedirs(CACHE, exist_ok=True)
+    write(LIST, json.dumps(rows, ensure_ascii=False, separators=(",", ":")).encode())
+    return True
+
+
+def icon(domain):
+    domain = domain.lower()
+    if not DOMAIN.match(domain):
+        return False
+    path = os.path.join(ICONS, domain + ".ico")
+    if os.path.exists(path):
+        return False
+    try:
+        data = fetch(ICON_SOURCE % domain, 512 * 1024)
+    except (OSError, ValueError):
+        return False
+    if not data:
+        return False
+    os.makedirs(ICONS, exist_ok=True)
+    write(path, data)
+    return True
+
+
+def icons(count, domains):
+    wanted = list(domains)
+    try:
+        with open(LIST) as f:
+            wanted += [row[2] for row in json.load(f)[:count] if row[2]]
+    except (OSError, ValueError):
+        pass
+    wanted = [d for d in dict.fromkeys(d.lower() for d in wanted)
+              if DOMAIN.match(d) and not os.path.exists(os.path.join(ICONS, d + ".ico"))]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        return any(list(pool.map(icon, wanted)))
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "update":
+        done = update(int(argv[2]) if len(argv) > 2 else WEEK)
+    elif len(argv) >= 2 and argv[1] == "icons":
+        done = icons(int(argv[2]) if len(argv) > 2 else 300, argv[3:])
+    elif len(argv) == 3 and argv[1] == "icon":
+        done = icon(argv[2])
+    else:
+        sys.stderr.write(__doc__)
+        return 2
+    if done:
+        print("updated")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

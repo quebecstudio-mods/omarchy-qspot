@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=qSpot Settings
+Name[fr]=Réglages de qSpot
+Comment=Search style, sources, web shortcuts and calculations
+Comment[fr]=Style, sources, raccourcis web et calculs de la recherche
+Keywords=search;spotlight;qspot;bangs;settings;
+Keywords[fr]=recherche;spotlight;qspot;bangs;réglages;paramètres;
+Exec=omarchy-shell -q quebecstudio.qspot settings
+Icon=qspot
+Terminal=false
+NoDisplay=false
+Categories=Settings;

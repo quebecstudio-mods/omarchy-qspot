@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Finds files for qSpot and ranks them, or lists the recently used ones.
+
+    qspot-files search <query> [limit]   files whose name holds the longest word
+                                         of the query, and whose path holds the
+                                         others, best first
+    qspot-files recent [limit]           recently used files, newest first
+    qspot-files index [max-age]          rebuilds qSpot's index of the home
+                                         folder if it is older than max-age
+                                         seconds (0, the default: always);
+                                         prints "updated" when it did
+
+search and recent print one JSON array: [{"path", "name", "parent", "dir", "mtime"}].
+
+The search reads qSpot's own plocate index of the home folder
+(~/.cache/qspot/home.db), which updatedb builds in about half a second without
+the folders below that nobody searches, so qSpot can refresh it often. Until it
+exists, the system's index (refreshed once a day) is used. Only the home folder
+is searched. Dependencies, caches, build output and
+hidden folders are left out, except ~/.config, which ranks lower; a query word
+starting with a dot ("." files, ".env") keeps hidden names.
+"""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import unicodedata
+from urllib.parse import unquote, urlparse
+from xml.etree import ElementTree
+
+HOME = os.path.expanduser("~")
+CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME") or os.path.join(HOME, ".cache"), "qspot")
+INDEX = os.path.join(CACHE, "home.db")
+
+# Folder names whose contents are never what someone searches for by name.
+NOISE = {
+    "node_modules", "vendor", "bower_components", "__pycache__", "site-packages",
+    "dist-packages", "venv", "cpresources", "Android", "snap",
+    # Browsers' and Electron apps' own storage, under ~/.config.
+    "IndexedDB", "Local Storage", "Session Storage", "Service Worker", "GPUCache",
+    "Code Cache", "DawnCache", "GrShaderCache", "ShaderCache", "blob_storage",
+    "Cache", "CacheStorage", "Crashpad", "databases", "Extensions", "WebStorage",
+}
+# Paths under the home folder left out with everything below them.
+NOISE_PATHS = ("go/pkg/", "storage/framework/", "storage/logs/")
+# Path pieces anywhere below the home folder: WordPress's own code and its
+# third-party plugins.
+NOISE_PIECES = ("/wp-content/plugins/", "/wp-includes/", "/wp-admin/", "/wp-content/upgrade/")
+# Folder names the index skips wherever they are: dependencies, caches,
+# version control, and browsers' storage. The search filters them anyway (for
+# the system's index); skipping them keeps qSpot's index small and quick.
+PRUNE_NAMES = sorted((NOISE - {"Android", "snap"}) | {
+    ".git", ".hg", ".svn", ".cache", ".venv", ".npm", ".bun", ".yarn", ".cargo",
+    ".rustup", ".gradle", ".m2", ".nuget", ".next", ".nuxt", ".turbo", ".parcel-cache",
+})
+PRUNE_PATHS = ["go/pkg", "Android", "snap", ".local/share/Trash", ".local/share/mise",
+               ".local/share/containers", ".local/share/Steam", ".var"]
+# Folders where people keep their own files: they rank higher.
+PREFERRED = {
+    "Work", "Documents", "Desktop", "Bureau", "Downloads", "Téléchargements",
+    "Pictures", "Images", "Projects", "Projets", "Music", "Musique", "Videos", "Vidéos",
+}
+# How many candidates get a stat call (age, folder or file) before the final sort.
+STAT_POOL = 80
+
+
+def fold(text):
+    """Lower case without accents, so "resume" finds "Résumé"."""
+    text = unicodedata.normalize("NFKD", text.lower())
+    return "".join(c for c in text if not unicodedata.combining(c))
+
+
+def tilde(path):
+    return "~" + path[len(HOME):] if path.startswith(HOME + "/") or path == HOME else path
+
+
+def entry(path, mtime=None, is_dir=None):
+    if mtime is None or is_dir is None:
+        try:
+            st = os.stat(path)
+            mtime, is_dir = st.st_mtime, os.path.isdir(path)
+        except OSError:
+            return None
+    return {
+        "path": path,
+        "name": os.path.basename(path) or path,
+        "parent": tilde(os.path.dirname(path)),
+        "dir": bool(is_dir),
+        "mtime": int(mtime),
+    }
+
+
+def recent_paths():
+    """Recently used local files, newest first, from the desktop's list."""
+    xbel = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local/share"),
+                        "recently-used.xbel")
+    try:
+        root = ElementTree.parse(xbel).getroot()
+    except (OSError, ElementTree.ParseError):
+        return []
+    rows = []
+    for mark in root.iter("bookmark"):
+        url = urlparse(mark.get("href", ""))
+        if url.scheme != "file":
+            continue
+        stamp = mark.get("visited") or mark.get("modified") or ""
+        rows.append((stamp, unquote(url.path)))
+    rows.sort(reverse=True)
+    seen, out = set(), []
+    for _, path in rows:
+        if path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def recent(limit):
+    out = []
+    for path in recent_paths():
+        row = entry(path)
+        if row:
+            out.append(row)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def left_out(rel, keep_hidden):
+    """Whether a path below the home folder is noise. Returns None to keep it,
+    else True; ~/.config is kept and ranked lower (see score)."""
+    if rel.startswith(NOISE_PATHS) or any(piece in "/" + rel for piece in NOISE_PIECES):
+        return True
+    parts = rel.split("/")
+    for i, part in enumerate(parts):
+        if part in NOISE:
+            return True
+        if part.startswith(".") and not (i == 0 and part == ".config"):
+            # A hidden name is kept only when it is the file itself and the
+            # query asks for it; hidden folders are always left out.
+            if not (keep_hidden and i == len(parts) - 1):
+                return True
+    return None
+
+
+def word_start(name, term):
+    """Whether term starts a word of name (after a separator or a case change)."""
+    i = name.find(term)
+    while i >= 0:
+        if i == 0 or not name[i - 1].isalnum():
+            return True
+        i = name.find(term, i + 1)
+    return False
+
+
+def score(path, rel, terms, query, recents):
+    name = fold(os.path.basename(path))
+    stem = name.rsplit(".", 1)[0] if "." in name[1:] else name
+    s = 0
+    if name == query or stem == query:
+        s += 100
+    elif name.startswith(terms[0]):
+        s += 50
+    elif word_start(name, terms[0]):
+        s += 30
+    else:
+        s += 10
+    if all(t in name for t in terms):
+        s += 20
+    depth = rel.count("/")
+    s -= 4 * max(0, depth - 2)
+    top = rel.split("/", 1)[0]
+    if top in PREFERRED:
+        s += 15
+    elif top == ".config":
+        s -= 10
+    if "/wp-content/" in "/" + rel:
+        s -= 20  # mostly bought themes; a theme of one's own is still found
+    if path in recents:
+        s += 25
+    return s
+
+
+def index(max_age):
+    """Rebuilds qSpot's index when it is older than max_age seconds."""
+    try:
+        if max_age > 0 and time.time() - os.stat(INDEX).st_mtime < max_age:
+            return False
+    except OSError:
+        pass
+    os.makedirs(CACHE, exist_ok=True)
+    temp = INDEX + ".new"
+    try:
+        done = subprocess.run(
+            ["updatedb", "--require-visibility", "no", "--database-root", HOME, "--output", temp,
+             "--prunenames", " ".join(PRUNE_NAMES),
+             "--prunepaths", " ".join(os.path.join(HOME, p) for p in PRUNE_PATHS),
+             "--prunefs", "", "--prune-bind-mounts", "no"],
+            capture_output=True, timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        # No updatedb (plocate not installed), or a home too large: the
+        # system's index serves meanwhile.
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        return False
+    if done.returncode != 0 or not os.path.exists(temp):
+        return False
+    os.replace(temp, INDEX)
+    return True
+
+
+def search(query, limit):
+    query = fold(" ".join(query.split()))
+    terms = query.split(" ")
+    if not query or len(query) < 2:
+        return []
+    # plocate matches the longest word in the names only (-b); the other words
+    # are checked against the whole path below.
+    longest = max(terms, key=len)
+    try:
+        database = ["-d", INDEX] if os.path.exists(INDEX) else []
+        found = subprocess.run(
+            ["plocate", *database, "-i", "-b", "-l", "20000", "--", longest],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    keep_hidden = any(t.startswith(".") for t in terms)
+    recents = set(recent_paths()[:200])
+    ranked = []
+    for path in found:
+        if not path.startswith(HOME + "/"):
+            continue
+        rel = path[len(HOME) + 1:]
+        if left_out(rel, keep_hidden):
+            continue
+        folded = fold(rel)
+        if not all(t in folded for t in terms):
+            continue
+        ranked.append((score(path, rel, terms, query, recents), path))
+    ranked.sort(key=lambda r: (-r[0], len(r[1]), r[1]))
+
+    # Age and kind only for the best candidates: recent files and folders move up.
+    now = time.time()
+    pool = []
+    for s, path in ranked[:STAT_POOL]:
+        try:
+            st = os.stat(path)
+        except OSError:
+            continue  # gone since the index was built
+        age = now - st.st_mtime
+        is_dir = os.path.isdir(path)
+        s += 20 if age < 7 * 86400 else 10 if age < 30 * 86400 else 3 if age < 365 * 86400 else 0
+        if is_dir:
+            s += 5
+        pool.append((s, path, st.st_mtime, is_dir))
+    pool.sort(key=lambda r: (-r[0], len(r[1]), r[1]))
+    return [entry(p, m, d) for _, p, m, d in pool[:limit]]
+
+
+def main(argv):
+    if len(argv) >= 2 and argv[1] == "index":
+        if index(int(argv[2]) if len(argv) > 2 else 0):
+            print("updated")
+        return 0
+    if len(argv) >= 2 and argv[1] == "recent":
+        rows = recent(int(argv[2]) if len(argv) > 2 else 8)
+    elif len(argv) >= 3 and argv[1] == "search":
+        rows = search(argv[2], int(argv[3]) if len(argv) > 3 else 8)
+    else:
+        sys.stderr.write(__doc__)
+        return 2
+    json.dump(rows, sys.stdout, ensure_ascii=False)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
