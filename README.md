@@ -87,6 +87,21 @@ blur behind it, add this rule to `~/.config/hypr/hyprland.lua`:
 hl.layer_rule({ match = { namespace = "^qspot$" }, blur = true, ignore_alpha = 0.2 })
 ```
 
+## Remove
+
+```bash
+omarchy plugin remove quebecstudio.qspot
+```
+
+Omarchy turns qSpot off, takes its magnifier out of the bar and deletes its
+folder. Then take out what you added by hand: the key in
+`~/.config/hypr/bindings.lua` (with `o.rebind`, deleting the line gives Alt+Space
+back to dictation), the blur rule in `~/.config/hypr/hyprland.lua` and, if you
+copied it, `~/.local/share/applications/qspot-settings.desktop`. qSpot's
+settings stay in its entry under `plugins` in `~/.config/omarchy/shell.json`,
+and what it learned and cached in `~/.local/state/qspot` and `~/.cache/qspot`:
+delete them too for a clean slate.
+
 ## Keys
 
 | Key | What it does |

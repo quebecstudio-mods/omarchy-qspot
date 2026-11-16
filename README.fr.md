@@ -90,6 +90,22 @@ le flou derrière, ajoutez cette règle à `~/.config/hypr/hyprland.lua` :
 hl.layer_rule({ match = { namespace = "^qspot$" }, blur = true, ignore_alpha = 0.2 })
 ```
 
+## Désinstallation
+
+```bash
+omarchy plugin remove quebecstudio.qspot
+```
+
+Omarchy désactive qSpot, retire sa loupe de la barre et supprime son dossier.
+Retirez ensuite ce que vous avez ajouté à la main : la touche dans
+`~/.config/hypr/bindings.lua` (avec `o.rebind`, supprimer la ligne rend Alt+Espace
+à la dictée), la règle de flou dans `~/.config/hypr/hyprland.lua` et, si vous
+l'avez copiée, `~/.local/share/applications/qspot-settings.desktop`. Les
+réglages de qSpot restent dans son entrée sous `plugins` dans
+`~/.config/omarchy/shell.json`, et ce qu'il a appris ou mis en cache dans
+`~/.local/state/qspot` et `~/.cache/qspot` : supprimez-les aussi pour repartir
+de zéro.
+
 ## Touches
 
 | Touche | Effet |
